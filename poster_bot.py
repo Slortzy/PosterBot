@@ -21,6 +21,7 @@ tree = app_commands.CommandTree(client)
 selected_channel: Optional[discord.TextChannel] = None
 channels_list = []
 ticket_messages = {}  # Pour stocker les messages de tickets
+ANNOUNCEMENT_CHANNEL_NAME = "admin-announcements"
 
 class DiscordBotGUI:
     def __init__(self, root):
@@ -181,95 +182,172 @@ class DiscordBotGUI:
         self.ticket_title_entry.delete(0, tk.END)
         self.ticket_desc_text.delete("1.0", tk.END)
 
-async def get_or_create_tickets_category(guild: discord.Guild) -> discord.CategoryChannel:
-    # Chercher la catégorie existante
-    category = discord.utils.get(guild.categories, name="Tickets")
+async def create_private_announcement_channel(guild: discord.Guild) -> discord.TextChannel:
+    # Look for existing announcement channel
+    channel = discord.utils.get(guild.text_channels, name=ANNOUNCEMENT_CHANNEL_NAME)
     
-    # Si la catégorie n'existe pas, la créer
-    if not category:
-        category = await guild.create_category(name="Tickets")
-        
-        # Définir les permissions de la catégorie
+    # If channel doesn't exist, create it
+    if not channel:
+        # Set permissions for the channel
         overwrites = {
-            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.default_role: discord.PermissionOverwrite(read_messages=True, send_messages=False),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
-        await category.edit(overwrites=overwrites)
+        
+        # Create the channel
+        channel = await guild.create_text_channel(
+            name=ANNOUNCEMENT_CHANNEL_NAME,
+            overwrites=overwrites,
+            topic="Canal d'annonces officiel - Seuls les administrateurs peuvent écrire ici"
+        )
+        
+        # Send initial message
+        await channel.send("🔒 Ce canal est réservé aux annonces officielles. Seuls les administrateurs peuvent y écrire.")
     
-    return category
+    return channel
 
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user} (ID: {client.user.id})')
     print('------')
     
-    # Afficher les serveurs où le bot est présent
+    # Display servers where the bot is present
     print("Connected to servers:")
     for guild in client.guilds:
         print(f"- {guild.name} (ID: {guild.id})")
-    
+        # Create announcement channel for each guild
+        await create_private_announcement_channel(guild)
+
+    # Register the commands
+    try:
+        await tree.sync()
+        print("Commands synced successfully!")
+    except Exception as e:
+        print(f"Failed to sync commands: {e}")
+
     # Mettre à jour la liste des canaux
     await update_channels_list()
 
+@tree.command(name="announce", description="Envoyer une annonce dans le canal d'annonces")
+@app_commands.describe(
+    title="Titre de l'annonce",
+    content="Contenu de l'annonce"
+)
+async def send_announcement(interaction: discord.Interaction, title: str, content: str):
+    # Check if user has admin permissions
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ Vous devez être administrateur pour utiliser cette commande.", ephemeral=True)
+        return
+
+    try:
+        # Get the announcement channel
+        channel = discord.utils.get(interaction.guild.text_channels, name=ANNOUNCEMENT_CHANNEL_NAME)
+        if not channel:
+            channel = await create_private_announcement_channel(interaction.guild)
+
+        # Create and send the embed
+        embed = discord.Embed(
+            title=title,
+            description=content,
+            color=discord.Color.blue()
+        )
+        embed.set_footer(text=f"Annonce par {interaction.user.name}")
+        
+        await channel.send(embed=embed)
+        await interaction.response.send_message("✅ Annonce envoyée avec succès!", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erreur lors de l'envoi de l'annonce: {str(e)}", ephemeral=True)
+
+@tree.command(name="ticket", description="Créer un nouveau ticket")
+@app_commands.describe(
+    title="Titre du ticket",
+    description="Description du ticket"
+)
+async def create_ticket(interaction: discord.Interaction, title: str, description: str):
+    try:
+        # Create embed for the ticket
+        embed = discord.Embed(
+            title=f"🎫 {title}",
+            description=description,
+            color=discord.Color.green()
+        )
+        embed.add_field(
+            name="Instructions",
+            value="Réagissez avec 🎫 pour créer un ticket",
+            inline=False
+        )
+        embed.set_footer(text="ArkeonProject - Système de tickets")
+        
+        # Send message and add reaction
+        message = await interaction.channel.send(embed=embed)
+        await message.add_reaction("🎫")
+        
+        # Store message for reaction handling
+        ticket_messages[message.id] = {"title": title, "description": description}
+        
+        await interaction.response.send_message("✅ Ticket créé avec succès!", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f"❌ Erreur lors de la création du ticket: {str(e)}", ephemeral=True)
+
 @client.event
 async def on_reaction_add(reaction, user):
-    # Ignorer les réactions du bot
+    # Ignore bot reactions
     if user.bot:
         return
 
     message = reaction.message
     
-    # Gestion de la création des tickets
+    # Handle ticket creation
     if message.id in ticket_messages and str(reaction.emoji) == "🎫":
         try:
-            # Supprimer la réaction de l'utilisateur
+            # Remove user's reaction
             await reaction.remove(user)
             
-            # Récupérer les données du ticket
+            # Get ticket data
             ticket_data = ticket_messages[message.id]
             
-            # Créer un nouveau canal pour le ticket
+            # Create new channel for ticket
             guild = message.guild
             
-            # Obtenir ou créer la catégorie Tickets
+            # Get or create Tickets category
             category = await get_or_create_tickets_category(guild)
             
-            # Créer le nom du canal
+            # Create channel name
             channel_name = f"ticket-{user.name.lower()}"
             
-            # Vérifier si un ticket existe déjà pour cet utilisateur
+            # Check if ticket already exists
             existing_ticket = discord.utils.get(category.channels, name=channel_name)
             if existing_ticket:
                 await user.send("Vous avez déjà un ticket ouvert!")
                 return
             
-            # Permissions pour le nouveau canal
+            # Permissions for new channel
             overwrites = {
                 guild.default_role: discord.PermissionOverwrite(read_messages=False),
                 user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
                 guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
             }
             
-            # Créer le canal dans la catégorie Tickets
+            # Create channel in Tickets category
             ticket_channel = await guild.create_text_channel(
                 name=channel_name,
                 category=category,
                 overwrites=overwrites
             )
             
-            # Créer l'embed pour le nouveau canal
+            # Create embed for new channel
             embed = discord.Embed(
                 title=f"Ticket: {ticket_data['title']}",
                 description=f"Ticket créé par {user.mention}\n\n{ticket_data['description']}",
                 color=discord.Color.green()
             )
-            embed.set_footer(text="Pour fermer le ticket, réagissez avec 🔒")
+            embed.set_footer(text="Réagissez avec 🔒 pour fermer le ticket")
             
-            # Envoyer l'embed et ajouter la réaction pour fermer
+            # Send embed and add close reaction
             ticket_message = await ticket_channel.send(embed=embed)
             await ticket_message.add_reaction("🔒")
             
-            # Notifier l'utilisateur
+            # Notify user
             await user.send(f"Votre ticket a été créé dans {ticket_channel.mention}")
             
         except Exception as e:
@@ -279,7 +357,7 @@ async def on_reaction_add(reaction, user):
             except:
                 pass
     
-    # Gestion de la fermeture des tickets
+    # Handle ticket closing
     elif str(reaction.emoji) == "🔒" and isinstance(message.channel, discord.TextChannel) and message.channel.name.startswith("ticket-"):
         if user == message.guild.owner or any(role.permissions.administrator for role in user.roles):
             await message.channel.send("Le ticket va être fermé dans 5 secondes...")
@@ -324,4 +402,4 @@ if __name__ == '__main__':
     bot_thread.start()
     
     # Démarrer l'interface graphique dans le thread principal
-    run_gui() 
+    run_gui()
