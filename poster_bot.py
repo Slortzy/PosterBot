@@ -1,186 +1,21 @@
 import discord
 from discord import app_commands
-import tkinter as tk
-from tkinter import ttk, messagebox
 import asyncio
-import threading
-from typing import Optional
 import os
 from dotenv import load_dotenv
 from keep_alive import keep_alive
 
-# Charger les variables d'environnement
+# Load environment variables
 load_dotenv()
 
-# Configuration du bot Discord
+# Discord bot configuration
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
 
-# Variables globales
-selected_channel: Optional[discord.TextChannel] = None
-channels_list = []
-ticket_messages = {}  # Pour stocker les messages de tickets
+# Global variables
+ticket_messages = {}  # To store ticket messages
 ANNOUNCEMENT_CHANNEL_NAME = "admin-announcements"
-
-class DiscordBotGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("Discord Bot Control Panel")
-        self.root.geometry("600x700")
-        
-        # Frame principale
-        main_frame = ttk.Frame(root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Frame pour la sélection du canal
-        channel_frame = ttk.Frame(main_frame)
-        channel_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(channel_frame, text="Select Channel:").grid(row=0, column=0, sticky=tk.W, padx=(0,5))
-        self.channel_var = tk.StringVar()
-        self.channel_combo = ttk.Combobox(channel_frame, textvariable=self.channel_var)
-        self.channel_combo.grid(row=0, column=1, sticky=(tk.W, tk.E), padx=(0,5))
-        self.channel_combo.bind('<<ComboboxSelected>>', self.on_channel_select)
-        
-        # Bouton de rafraîchissement
-        ttk.Button(channel_frame, text="🔄 Refresh", command=self.refresh_channels).grid(row=0, column=2, sticky=tk.E)
-        
-        # Section Message
-        message_frame = ttk.LabelFrame(main_frame, text="Send Message", padding="10")
-        message_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
-        
-        ttk.Label(message_frame, text="Title:").grid(row=0, column=0, sticky=tk.W)
-        self.title_entry = ttk.Entry(message_frame, width=50)
-        self.title_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(message_frame, text="Content:").grid(row=1, column=0, sticky=tk.W)
-        self.content_text = tk.Text(message_frame, width=50, height=10)
-        self.content_text.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Button(message_frame, text="Send Message", command=self.send_message).grid(row=2, column=1, sticky=tk.E, pady=10)
-        
-        # Section Ticket
-        ticket_frame = ttk.LabelFrame(main_frame, text="Create Ticket", padding="10")
-        ticket_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=10)
-        
-        ttk.Label(ticket_frame, text="Ticket Title:").grid(row=0, column=0, sticky=tk.W)
-        self.ticket_title_entry = ttk.Entry(ticket_frame, width=50)
-        self.ticket_title_entry.grid(row=0, column=1, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(ticket_frame, text="Description:").grid(row=1, column=0, sticky=tk.W)
-        self.ticket_desc_text = tk.Text(ticket_frame, width=50, height=5)
-        self.ticket_desc_text.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Button(ticket_frame, text="Create Ticket", command=self.create_ticket).grid(row=2, column=1, sticky=tk.E, pady=10)
-        
-        # Status bar
-        self.status_var = tk.StringVar()
-        self.status_var.set("Bot starting...")
-        ttk.Label(main_frame, textvariable=self.status_var).grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E))
-        
-        self.update_channels_list()
-    
-    def refresh_channels(self):
-        self.status_var.set("Refreshing channels list...")
-        asyncio.run_coroutine_threadsafe(update_channels_list(), client.loop)
-        self.root.after(1000, lambda: self.status_var.set("Channels list refreshed!"))
-    
-    def update_channels_list(self):
-        global channels_list
-        self.channel_combo['values'] = [ch.name for ch in channels_list]
-        if not self.channel_combo['values']:
-            self.status_var.set("No channels found. Try refreshing the list.")
-        else:
-            self.status_var.set(f"Found {len(channels_list)} channels")
-    
-    def on_channel_select(self, event):
-        global selected_channel, channels_list
-        channel_name = self.channel_var.get()
-        selected_channel = next((ch for ch in channels_list if ch.name == channel_name), None)
-        if selected_channel:
-            self.status_var.set(f"Selected channel: {selected_channel.name}")
-    
-    def send_message(self):
-        if not selected_channel:
-            messagebox.showerror("Error", "Please select a channel first!")
-            return
-            
-        title = self.title_entry.get().strip()
-        content = self.content_text.get("1.0", tk.END).strip()
-        
-        if not title or not content:
-            messagebox.showerror("Error", "Please fill in both title and content!")
-            return
-            
-        asyncio.run_coroutine_threadsafe(
-            self.send_discord_message(title, content),
-            client.loop
-        )
-    
-    async def send_discord_message(self, title: str, content: str):
-        try:
-            embed = discord.Embed(title=title, description=content, color=discord.Color.blue())
-            await selected_channel.send(embed=embed)
-            self.root.after(0, lambda: self.status_var.set("Message sent successfully!"))
-            self.root.after(0, self.clear_message_fields)
-        except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to send message: {str(e)}"))
-    
-    def clear_message_fields(self):
-        self.title_entry.delete(0, tk.END)
-        self.content_text.delete("1.0", tk.END)
-    
-    def create_ticket(self):
-        if not selected_channel:
-            messagebox.showerror("Error", "Please select a channel first!")
-            return
-            
-        title = self.ticket_title_entry.get().strip()
-        description = self.ticket_desc_text.get("1.0", tk.END).strip()
-        
-        if not title or not description:
-            messagebox.showerror("Error", "Please fill in both ticket title and description!")
-            return
-            
-        asyncio.run_coroutine_threadsafe(
-            self.create_discord_ticket(title, description),
-            client.loop
-        )
-    
-    async def create_discord_ticket(self, title: str, description: str):
-        try:
-            # Création de l'embed pour le ticket
-            embed = discord.Embed(
-                title=f"🎫 {title}",
-                description=description,
-                color=discord.Color.green()
-            )
-            embed.add_field(
-                name="Instructions",
-                value="Réagissez avec 🎫 pour créer un ticket",
-                inline=False
-            )
-            embed.set_footer(text="ArkeonProject - Système de tickets")
-            
-            # Envoi du message et ajout de la réaction
-            message = await selected_channel.send(embed=embed)
-            await message.add_reaction("🎫")
-            
-            # Stocker le message pour la gestion des réactions
-            global ticket_messages
-            ticket_messages[message.id] = {"title": title, "description": description}
-            
-            # Mise à jour du statut
-            self.root.after(0, lambda: self.status_var.set("Ticket created successfully!"))
-            self.root.after(0, self.clear_ticket_fields)
-
-        except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to create ticket: {str(e)}"))
-    
-    def clear_ticket_fields(self):
-        self.ticket_title_entry.delete(0, tk.END)
-        self.ticket_desc_text.delete("1.0", tk.END)
 
 async def create_private_announcement_channel(guild: discord.Guild) -> discord.TextChannel:
     # Look for existing announcement channel
@@ -206,6 +41,23 @@ async def create_private_announcement_channel(guild: discord.Guild) -> discord.T
     
     return channel
 
+async def get_or_create_tickets_category(guild: discord.Guild) -> discord.CategoryChannel:
+    # Look for existing category
+    category = discord.utils.get(guild.categories, name="Tickets")
+    
+    # If category doesn't exist, create it
+    if not category:
+        category = await guild.create_category(name="Tickets")
+        
+        # Set category permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+        await category.edit(overwrites=overwrites)
+    
+    return category
+
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user} (ID: {client.user.id})')
@@ -224,9 +76,6 @@ async def on_ready():
         print("Commands synced successfully!")
     except Exception as e:
         print(f"Failed to sync commands: {e}")
-
-    # Mettre à jour la liste des canaux
-    await update_channels_list()
 
 @tree.command(name="announce", description="Envoyer une annonce dans le canal d'annonces")
 @app_commands.describe(
@@ -367,39 +216,16 @@ async def on_reaction_add(reaction, user):
             except Exception as e:
                 print(f"Erreur lors de la suppression du canal: {str(e)}")
 
-async def update_channels_list():
-    global channels_list
-    channels_list.clear()  # Vider la liste existante
-    for guild in client.guilds:
-        channels_list.extend(guild.text_channels)
-    
-    # Mettre à jour l'interface si elle existe
-    if hasattr(client, 'gui_instance'):
-        client.gui_instance.root.after(0, client.gui_instance.update_channels_list)
-
-def run_bot():
-    # Récupérer le token depuis les variables d'environnement
+if __name__ == '__main__':
+    print("Starting bot...")
+    # Get token from environment variables
     token = os.getenv('DISCORD_TOKEN')
     if not token:
         print("Error: No token found in environment variables!")
         print("Please make sure to set DISCORD_TOKEN in your .env file or environment variables.")
         exit(1)
     
-    client.run(token)
-
-def run_gui():
-    root = tk.Tk()
-    app = DiscordBotGUI(root)
-    client.gui_instance = app  # Stocker l'instance de GUI pour les mises à jour
-    root.mainloop()
-
-if __name__ == '__main__':
-    print("Starting bot...")
-    # Démarrer le serveur web keep alive
+    # Start the keep alive web server
     keep_alive()
-    # Démarrer le bot dans un thread séparé
-    bot_thread = threading.Thread(target=run_bot)
-    bot_thread.start()
-    
-    # Démarrer l'interface graphique dans le thread principal
-    run_gui()
+    # Start the bot
+    client.run(token)
