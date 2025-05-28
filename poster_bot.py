@@ -58,6 +58,17 @@ async def get_or_create_tickets_category(guild: discord.Guild) -> discord.Catego
     
     return category
 
+async def sync_commands_for_guild(guild: discord.Guild):
+    """Synchronise les commandes pour un serveur spécifique"""
+    try:
+        print(f"Synchronisation des commandes pour le serveur : {guild.name}")
+        commands = await tree.sync(guild=guild)
+        print(f"✅ {len(commands)} commandes synchronisées pour {guild.name}")
+        return True
+    except Exception as e:
+        print(f"❌ Erreur lors de la synchronisation pour {guild.name}: {str(e)}")
+        return False
+
 @client.event
 async def on_ready():
     print(f'Logged in as {client.user} (ID: {client.user.id})')
@@ -65,17 +76,24 @@ async def on_ready():
     
     # Display servers where the bot is present
     print("Connected to servers:")
+    success_count = 0
     for guild in client.guilds:
         print(f"- {guild.name} (ID: {guild.id})")
         # Create announcement channel for each guild
-        await create_private_announcement_channel(guild)
+        try:
+            await create_private_announcement_channel(guild)
+            print(f"✅ Canal d'annonces créé/vérifié pour {guild.name}")
+        except Exception as e:
+            print(f"❌ Erreur lors de la création du canal pour {guild.name}: {str(e)}")
 
-    # Register the commands
-    try:
-        await tree.sync()
-        print("Commands synced successfully!")
-    except Exception as e:
-        print(f"Failed to sync commands: {e}")
+        # Sync commands for each guild
+        if await sync_commands_for_guild(guild):
+            success_count += 1
+
+    print(f"\nSynchronisation terminée : {success_count}/{len(client.guilds)} serveurs synchronisés")
+    print("Les commandes suivantes devraient être disponibles :")
+    print("- /announce (admin uniquement)")
+    print("- /ticket (tout le monde)")
 
 @tree.command(name="announce", description="Envoyer une annonce dans le canal d'annonces")
 @app_commands.describe(
@@ -137,6 +155,17 @@ async def create_ticket(interaction: discord.Interaction, title: str, descriptio
         await interaction.response.send_message("✅ Ticket créé avec succès!", ephemeral=True)
     except Exception as e:
         await interaction.response.send_message(f"❌ Erreur lors de la création du ticket: {str(e)}", ephemeral=True)
+
+@client.event
+async def on_guild_join(guild: discord.Guild):
+    """Appelé quand le bot rejoint un nouveau serveur"""
+    print(f"Bot ajouté au serveur : {guild.name}")
+    try:
+        await create_private_announcement_channel(guild)
+        print(f"✅ Canal d'annonces créé pour {guild.name}")
+        await sync_commands_for_guild(guild)
+    except Exception as e:
+        print(f"❌ Erreur lors de l'initialisation pour {guild.name}: {str(e)}")
 
 @client.event
 async def on_reaction_add(reaction, user):
